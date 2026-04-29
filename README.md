@@ -9,11 +9,13 @@ Uses the [commercial-use fork](https://github.com/GaXxO-dev/TRELLIS.2-commercial
 - **GPU**: NVIDIA A100 (80GB) or H100 (80GB) — minimum 48GB VRAM
 - **RunPod**: Serverless endpoint with model caching enabled for `microsoft/TRELLIS.2-4B`
 - **Cloudflare R2**: Bucket for storing generated 3D models (workaround for RunPod's 10/20MB response payload limit)
+- **Hugging Face Token**: Required for the gated `dinov3-vitl16` model (accept terms at https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m)
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |---|---|---|
+| `HF_TOKEN` | Yes | Hugging Face access token (read-only) — needed for gated dinov3 model |
 | `R2_ENDPOINT_URL` | Yes | Cloudflare R2 S3-compatible endpoint (`https://<account>.r2.cloudflarestorage.com`) |
 | `R2_ACCESS_KEY_ID` | Yes | R2 access key |
 | `R2_SECRET_ACCESS_KEY` | Yes | R2 secret key |

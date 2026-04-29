@@ -46,8 +46,6 @@ from PIL import Image
 TRELLIS_PATH = os.environ.get("TRELLIS_PATH", "/app/TRELLIS.2")
 sys.path.insert(0, TRELLIS_PATH)
 
-# RunPod model cache configuration
-CACHE_DIR = "/runpod-volume/huggingface-cache/hub"
 HF_MODEL_ID = "microsoft/TRELLIS.2-4B"
 
 # Global pipeline - initialized once at worker startup
@@ -84,18 +82,6 @@ def upload_to_r2(filepath: str, filename: str) -> str:
     )
 
 
-def find_cached_model_path(model_name: str) -> str | None:
-    """Find model path in RunPod's cache directory."""
-    cache_name = model_name.replace("/", "--")
-    snapshots_dir = os.path.join(CACHE_DIR, f"models--{cache_name}", "snapshots")
-
-    if os.path.exists(snapshots_dir):
-        snapshots = os.listdir(snapshots_dir)
-        if snapshots:
-            return os.path.join(snapshots_dir, snapshots[0])
-    return None
-
-
 def load_model():
     """Load TRELLIS.2 model into GPU memory."""
     global pipeline
@@ -108,15 +94,8 @@ def load_model():
 
     from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
-    # Check RunPod's cache first
-    cached_path = find_cached_model_path(HF_MODEL_ID)
-
-    if cached_path:
-        print(f"Loading from RunPod cache: {cached_path}")
-        pipeline = Trellis2ImageTo3DPipeline.from_pretrained(cached_path)
-    else:
-        print(f"Model not in cache, downloading: {HF_MODEL_ID}")
-        pipeline = Trellis2ImageTo3DPipeline.from_pretrained(HF_MODEL_ID)
+    print(f"Model: {HF_MODEL_ID}")
+    pipeline = Trellis2ImageTo3DPipeline.from_pretrained(HF_MODEL_ID)
 
     pipeline.low_vram = False
     pipeline.cuda()
