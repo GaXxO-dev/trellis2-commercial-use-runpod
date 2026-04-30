@@ -18,16 +18,42 @@ Usage:
     }
 
 Required env vars:
+    HF_TOKEN: HuggingFace token (required for gated models: facebook/dinov3-*)
     R2_ENDPOINT_URL: Cloudflare R2 endpoint
     R2_ACCESS_KEY_ID: R2 access key
     R2_SECRET_ACCESS_KEY: R2 secret key
     R2_BUCKET_NAME: R2 bucket name
     R2_PUBLIC_URL: (optional) Public base URL for R2 bucket
+
+RunPod setup:
+    - Attach a network volume for model caching (100GB+ recommended)
+    - Models are cached at /runpod-volume/huggingface-cache/
 """
 
 import os
 
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
+
+HF_CACHE_DIR = os.environ.get("HF_HOME", "/runpod-volume/huggingface-cache")
+if os.path.exists("/runpod-volume"):
+    os.environ["HF_HOME"] = HF_CACHE_DIR
+    os.makedirs(HF_CACHE_DIR, exist_ok=True)
+    print(f"[Startup] HuggingFace cache directory: {HF_CACHE_DIR}")
+else:
+    print("[Startup] WARNING: /runpod-volume not found - models will not be persisted across restarts")
+    print("[Startup]         Attach a network volume for model caching to reduce cold start times")
+
+HF_TOKEN = os.environ.get("HF_TOKEN")
+if HF_TOKEN and not HF_TOKEN.startswith("{{"):
+    print(f"[Startup] HF_TOKEN configured (length: {len(HF_TOKEN)} chars)")
+elif not HF_TOKEN:
+    print("[Startup] WARNING: HF_TOKEN not set - gated models (facebook/dinov3-*) may fail")
+    print("[Startup]         Set HF_TOKEN as a RunPod secret with access to facebook/dinov3 models")
+elif HF_TOKEN.startswith("{{"):
+    raise RuntimeError(
+        "HF_TOKEN not resolved! The secret {{ RUNPOD_SECRET_HF_TOKEN }} was not injected. "
+        "Verify the secret exists in RunPod Console → Settings → Secrets"
+    )
 
 import runpod
 import sys
@@ -83,25 +109,51 @@ def upload_to_r2(filepath: str, filename: str) -> str:
 
 
 def load_model():
-    """Load TRELLIS.2 model into GPU memory."""
+    """Load TRELLIS.2 model into GPU memory.
+    
+    Uses HuggingFace cache at HF_HOME for model persistence.
+    Requires HF_TOKEN for gated models (facebook/dinov3-*).
+    """
     global pipeline
 
     if pipeline is not None:
         return pipeline
 
+    print("=" * 50)
     print("Loading TRELLIS.2 model...")
+    print("=" * 50)
     start_time = time.time()
+
+    print(f"[Model] Model ID: {HF_MODEL_ID}")
+    print(f"[Model] HF_HOME: {os.environ.get('HF_HOME', 'not set')}")
+    print(f"[Model] HF_TOKEN: {'configured' if os.environ.get('HF_TOKEN') and not os.environ.get('HF_TOKEN', '').startswith('{{') else 'MISSING'}")
 
     from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
-    print(f"Model: {HF_MODEL_ID}")
-    pipeline = Trellis2ImageTo3DPipeline.from_pretrained(HF_MODEL_ID)
+    try:
+        pipeline = Trellis2ImageTo3DPipeline.from_pretrained(HF_MODEL_ID)
+    except Exception as e:
+        error_msg = str(e)
+        if "401" in error_msg or "Unauthorized" in error_msg or "403" in error_msg:
+            raise RuntimeError(
+                f"HuggingFace authentication failed. Ensure HF_TOKEN is set correctly "
+                f"and you have accepted the license for facebook/dinov3-vitl16-pretrain-lvd1689m. "
+                f"Original error: {error_msg}"
+            ) from e
+        if "Repository Not Found" in error_msg or "not found" in error_msg.lower():
+            raise RuntimeError(
+                f"Model repository not found. Check: 1) HF_TOKEN is valid, "
+                f"2) Network volume is attached (for caching), "
+                f"3) Internet connectivity. Original error: {error_msg}"
+            ) from e
+        raise
 
     pipeline.low_vram = False
     pipeline.cuda()
 
     elapsed = time.time() - start_time
-    print(f"Model loaded in {elapsed:.2f}s")
+    print(f"[Model] Model loaded successfully in {elapsed:.2f}s")
+    print("=" * 50)
 
     return pipeline
 
@@ -291,16 +343,38 @@ def handler(job):
 
 
 # Initialize model at worker startup (RunPod best practice)
-print("=" * 50)
-print("TRELLIS.2 RunPod Worker Starting...")
-print("=" * 50)
+print("=" * 60)
+print("TRELLIS.2 RunPod Worker Initializing...")
+print("=" * 60)
 
+print(f"[Startup] Working directory: {os.getcwd()}")
+print(f"[Startup] Python version: {sys.version}")
+print(f"[Startup] CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"[Startup] CUDA device: {torch.cuda.get_device_name(0)}")
+    print(f"[Startup] CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+
+print(f"[Startup] HF_HOME: {os.environ.get('HF_HOME', 'not set')}")
+print(f"[Startup] HF_TOKEN: {'configured' if os.environ.get('HF_TOKEN') and not os.environ.get('HF_TOKEN', '').startswith('{{') else 'MISSING OR UNRESOLVED'}")
+
+if not os.environ.get("HF_TOKEN") or os.environ.get("HF_TOKEN", "").startswith("{{"):
+    print("[Startup] ERROR: HF_TOKEN is not properly configured!")
+    print("[Startup] This will cause model loading to fail for gated models.")
+    print("[Startup] Fix: Add HF_TOKEN as a RunPod secret and reference it as:")
+    print("[Startup]        HF_TOKEN={{ RUNPOD_SECRET_HF_TOKEN }}")
+
+print("[Startup] Pre-loading model (this may take several minutes on first run)...")
 try:
     load_model()
-    print("Model loaded successfully!")
+    print("[Startup] Model loaded successfully!")
 except Exception as e:
-    print(f"Warning: Model pre-load failed: {e}")
-    print("Model will be loaded on first request")
+    print(f"[Startup] WARNING: Model pre-load failed: {e}")
+    print("[Startup] Model will be loaded on first request")
+    import traceback
+    traceback.print_exc()
 
 # Start RunPod serverless worker
+print("=" * 60)
+print("Starting RunPod serverless handler...")
+print("=" * 60)
 runpod.serverless.start({"handler": handler})
