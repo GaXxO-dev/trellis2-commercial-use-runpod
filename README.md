@@ -7,7 +7,7 @@ Uses the [commercial-use fork](https://github.com/GaXxO-dev/TRELLIS.2-commercial
 ## Requirements
 
 - **GPU**: NVIDIA A100 (80GB), H100 (80GB), or equivalent — minimum 48GB VRAM
-- **RunPod Account**: Serverless endpoint with network volume for model caching
+- **RunPod Account**: Serverless endpoint with network volume (~$2.10/mo for 30GB)
 - **Cloudflare R2**: S3-compatible storage for generated 3D models
 - **Hugging Face Token**: Required for gated `facebook/dinov3-vitl16-pretrain-lvd1689m` model
 
@@ -38,13 +38,23 @@ TRELLIS.2 uses `facebook/dinov3-vitl16-pretrain-lvd1689m` for image feature extr
 
 ### Step 1: Create Network Volume
 
-TRELLIS.2 requires ~16GB of model files. A network volume persists downloads across cold starts.
+TRELLIS.2 requires ~20-25GB of cached model files:
+
+| Model | Size | Purpose |
+|-------|------|---------|
+| `microsoft/TRELLIS.2-4B` | ~15 GB | Main pipeline |
+| `microsoft/TRELLIS-image-large` | ~2 GB | Sparse structure decoder |
+| `facebook/dinov3-vitl16` | ~1.2 GB | Image features (gated) |
+| `ZhengPeng7/BiRefNet` | ~3 GB | Background removal |
+| **Total** | **~21 GB** | |
+
+**Recommended network volume: 30 GB** (~$2.10/mo at $0.07/GB)
 
 1. Go to **Storage → Network Volumes** in RunPod Console
 2. Click **New Network Volume**
 3. Configure:
    - **Name**: `trellis2-models` (or your preference)
-   - **Size**: `100` GB (minimum)
+   - **Size**: `30` GB (minimum recommended)
    - **Data Center**: Choose based on GPU availability
 4. Note the volume ID (e.g., `nv-xxxxxx`)
 
@@ -155,7 +165,7 @@ TRELLIS.2 RunPod Worker Initializing...
 [Startup] Pre-loading model (this may take several minutes on first run)...
 ```
 
-**First cold start**: Downloads ~16GB of models (TRELLIS.2-4B + DINOv3 + BiRefNet) — expect 5-10 minutes depending on network.
+**First cold start**: Downloads ~21GB of models (TRELLIS.2-4B + DINOv3 + BiRefNet) — expect 5-10 minutes depending on network.
 
 **Subsequent cold starts**: Models load from network volume cache — expect 30-60 seconds.
 
@@ -276,7 +286,7 @@ Benchmarks from NVIDIA H100 80GB. Times include model loading, inference, export
 ```
 
 **Key Components:**
-- **Model caching**: Network volume at `/runpod-volume/huggingface-cache/` persists ~16GB of models
+- **Model caching**: Network volume at `/runpod-volume/huggingface-cache/` persists ~21GB of models
 - **GPU memory**: Model stays loaded (`low_vram=False`) for sub-60s inference
 - **Output storage**: Cloudflare R2 bypasses RunPod's 20MB response limit
 
