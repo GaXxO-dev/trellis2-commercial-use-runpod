@@ -49,10 +49,6 @@ RUN pip install --no-cache-dir --constraint /tmp/constraints.txt \
 RUN git clone --recursive \
     https://github.com/GaXxO-dev/TRELLIS.2-commercial-use.git /app/TRELLIS.2
 
-# Fix o-voxel import path - use trellis2.utils.drtk_compat instead of broken relative path
-RUN sed -i 's|sys.path.insert(0, os.path.join(os.path.dirname(__file__), '\''..'\'', '\''..'\'', '\''trellis2'\''))||' /app/TRELLIS.2/o-voxel/o_voxel/postprocess.py \
-    && sed -i 's|from utils.drtk_compat import|from trellis2.utils.drtk_compat import|' /app/TRELLIS.2/o-voxel/o_voxel/postprocess.py
-
 RUN pip install --no-cache-dir --no-build-isolation /app/TRELLIS.2/o-voxel
 
 RUN git clone https://github.com/JeffreyXiang/CuMesh.git /tmp/CuMesh --recursive \
