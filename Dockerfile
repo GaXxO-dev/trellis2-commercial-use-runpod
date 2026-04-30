@@ -12,8 +12,11 @@ ENV MAX_JOBS=4
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:ubuntu-toolchain-r/test \
+    && apt-get update && apt-get install -y --no-install-recommends \
     python3.10 python3.10-dev python3-pip \
-    ffmpeg libgl1-mesa-glx libglib2.0-0 libjpeg-dev libwebp-dev ninja-build git \
+    ffmpeg libgl1-mesa-glx libglib2.0-0 libjpeg-dev libwebp-dev ninja-build git g++-12 \
     && ln -sf /usr/bin/python3.10 /usr/bin/python \
     && ln -sf /usr/bin/python3.10 /usr/bin/python3 \
     && rm -rf /var/lib/apt/lists/*
