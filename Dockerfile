@@ -39,6 +39,8 @@ COPY requirements-inference.txt /tmp/requirements-inference.txt
 RUN pip install --no-cache-dir --constraint /tmp/constraints.txt \
     -r /tmp/requirements-inference.txt
 
+RUN pip install --no-cache-dir --constraint /tmp/constraints.txt kornia timm psutil
+
 RUN pip install --no-cache-dir runpod boto3 requests
 
 RUN pip install --no-cache-dir --constraint /tmp/constraints.txt \

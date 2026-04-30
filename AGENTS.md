@@ -51,3 +51,7 @@ RunPod's model caching + `huggingface_hub` auto-resolve from `$HF_HOME/hub/` whe
 ## Prebuilt wheels (do not build from source)
 
 flash-attn 2.7.3 and DRTK are installed as prebuilt wheels from release URLs. Building from source is slower and error-prone. Wheel URLs are in `ENVIRONMENT.md` on the fork repo and hardcoded in the Dockerfile.
+
+## Easy-to-miss runtime dependencies
+
+`kornia`, `timm`, and `psutil` are NOT in `requirements-inference.txt` but are required at runtime by TRELLIS.2's BiRefNet background removal model (`transformers.AutoModelForImageSegmentation` loads them dynamically). They are installed in a dedicated Dockerfile RUN step.
