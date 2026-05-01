@@ -279,7 +279,6 @@ def handler(job):
             max_num_tokens=max_num_tokens,
         )[0]
         mesh.simplify(simplify_target)
-        torch.cuda.empty_cache()
     except Exception as e:
         return {"error": f"Inference failed: {str(e)}"}
 
@@ -314,7 +313,6 @@ def handler(job):
             model_path = f.name
 
         glb.export(model_path, extension_webp=(output_format == "glb" and extension_webp))
-        torch.cuda.empty_cache()
 
         model_url = upload_to_r2(model_path, r2_key)
         model_size_mb = os.path.getsize(model_path) / (1024 * 1024)
@@ -346,6 +344,13 @@ def handler(job):
 print("=" * 60)
 print("TRELLIS.2 RunPod Worker Initializing...")
 print("=" * 60)
+
+# Enable TF32 for Ampere/Hopper GPUs (H100/A100) for faster matmul
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.set_float32_matmul_precision('high')
+# Enable cuDNN benchmark for optimized convolution algorithms (consistent image sizes)
+torch.backends.cudnn.benchmark = True
 
 print(f"[Startup] Working directory: {os.getcwd()}")
 print(f"[Startup] Python version: {sys.version}")

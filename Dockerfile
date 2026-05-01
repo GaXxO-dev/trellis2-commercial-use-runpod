@@ -1,7 +1,6 @@
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 ENV PYTHONUNBUFFERED=1
-ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ENV OPENCV_IO_ENABLE_OPENEXR=1
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
