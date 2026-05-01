@@ -38,19 +38,20 @@ TRELLIS.2 uses `facebook/dinov3-vitl16-pretrain-lvd1689m` for image feature extr
 
 ### Step 1: Create Network Volume
 
-**Network Volume** stores auxiliary models (~3GB total):
+**Network Volume** stores ALL models (~21GB total):
+- `microsoft/TRELLIS.2-4B` (~18 GB) - Main pipeline (8 models)
 - `facebook/dinov3-vitl16-pretrain-lvd1689m` (~1.2 GB) - Image features (gated)
 - `ZhengPeng7/BiRefNet` (~1.5 GB) - Background removal
 
-**Note:** The main `microsoft/TRELLIS.2-4B` model (~18GB) is handled by **RunPod Model Caching** (Step 4), not the network volume.
+**Note:** RunPod Model Caching (Step 4) pre-downloads `microsoft/TRELLIS.2-4B` to hosts, but models are still stored at `/runpod-volume/huggingface-cache/`. The network volume must have space for all models.
 
-**Recommended network volume: 10 GB** (~$0.70/mo) — RunPod minimum
+**Recommended network volume: 30-50 GB** (~$2.10-3.50/mo)
 
 1. Go to **Storage → Network Volumes** in RunPod Console
 2. Click **New Network Volume**
 3. Configure:
-   - **Name**: `trellis2-aux-models` (or your preference)
-   - **Size**: `10` GB (RunPod minimum)
+   - **Name**: `trellis2-models` (or your preference)
+   - **Size**: `30` GB (minimum for all models + headroom)
    - **Data Center**: Choose based on GPU availability
 4. Note the volume ID (e.g., `nv-xxxxxx`)
 
@@ -307,12 +308,11 @@ Benchmarks from NVIDIA H100 80GB. Times include model loading, inference, export
 │                                                                  │
 │  Request ──┬──► RunPod Worker                                   │
 │             │       │                                            │
-│             │       ├── RunPod Model Cache (HOST):              │
-│             │       │   └── microsoft/TRELLIS.2-4B (~18GB)     │
-│             │       │                                            │
 │             │       ├── Network Volume (/runpod-volume/):      │
+│             │       │   └── microsoft/TRELLIS.2-4B (~18GB)     │
 │             │       │   └── facebook/dinov3-vitl16 (~1.2GB)    │
 │             │       │   └── ZhengPeng7/BiRefNet (~1.5GB)       │
+│             │       │   Total: ~21GB                            │
 │             │       │                                            │
 │             │       ├── TRELLIS.2 Pipeline (GPU)                 │
 │             │       │   └── Image → 3D Voxel → Mesh              │
@@ -327,10 +327,10 @@ Benchmarks from NVIDIA H100 80GB. Times include model loading, inference, export
 ```
 
 **Key Components:**
-- **RunPod Model Caching**: Pre-downloads `microsoft/TRELLIS.2-4B` to host (~18GB) — eliminates main model download from cold start
-- **Network Volume**: Persists auxiliary models (DINOv3 + BiRefNet, ~3GB) across worker restarts — small 5GB volume is sufficient
+- **RunPod Model Caching**: Pre-downloads `microsoft/TRELLIS.2-4B` to hosts with network volume attached — reduces first cold start from 15+ min to ~5 min
+- **Network Volume (30GB+)**: Persists ALL models (~21GB) across worker restarts
 - **Offline Mode**: After first download, workers use `HF_HUB_OFFLINE=1` for instant cache loads (10-30 sec)
-- **File Locking**: First worker downloads auxiliary models, others wait and use cached copies
+- **File Locking**: First worker downloads, others wait and use cached copies
 - **GPU memory**: Model stays loaded (`low_vram=False`) for sub-60s inference
 - **Output storage**: Cloudflare R2 bypasses RunPod's 20MB response limit
 
