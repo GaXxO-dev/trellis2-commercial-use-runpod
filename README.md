@@ -44,13 +44,13 @@ TRELLIS.2 uses `facebook/dinov3-vitl16-pretrain-lvd1689m` for image feature extr
 
 **Note:** The main `microsoft/TRELLIS.2-4B` model (~18GB) is handled by **RunPod Model Caching** (Step 4), not the network volume.
 
-**Recommended network volume: 5-10 GB** (~$0.35-0.70/mo)
+**Recommended network volume: 10 GB** (~$0.70/mo) — RunPod minimum
 
 1. Go to **Storage → Network Volumes** in RunPod Console
 2. Click **New Network Volume**
 3. Configure:
    - **Name**: `trellis2-aux-models` (or your preference)
-   - **Size**: `5` GB (minimum recommended)
+   - **Size**: `10` GB (RunPod minimum)
    - **Data Center**: Choose based on GPU availability
 4. Note the volume ID (e.g., `nv-xxxxxx`)
 
