@@ -27,21 +27,48 @@ Required env vars:
 
 RunPod setup:
     - Attach a network volume for model caching (100GB+ recommended)
+    - Enable RunPod Model Caching for microsoft/TRELLIS.2-4B in endpoint config
     - Models are cached at /runpod-volume/huggingface-cache/
 """
 
 import os
 
+# CRITICAL: Set environment variables BEFORE any imports that might use them
+# These must be set before importing huggingface_hub, transformers, etc.
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
+os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
 
+# Cache directories - set BEFORE any HF imports
 HF_CACHE_DIR = os.environ.get("HF_HOME", "/runpod-volume/huggingface-cache")
+
 if os.path.exists("/runpod-volume"):
     os.environ["HF_HOME"] = HF_CACHE_DIR
-    os.makedirs(HF_CACHE_DIR, exist_ok=True)
-    print(f"[Startup] HuggingFace cache directory: {HF_CACHE_DIR}")
+    os.environ["HF_HUB_CACHE"] = HF_CACHE_DIR
+    os.makedirs(f"{HF_CACHE_DIR}/hub", exist_ok=True)
+    print(f"[Startup] Network volume detected: /runpod-volume")
+    print(f"[Startup] HF cache directory: {HF_CACHE_DIR}")
+    
+    # Check if we have cached models - if so, use offline mode
+    cache_hub = os.path.join(HF_CACHE_DIR, "hub")
+    trellis_cached = os.path.exists(os.path.join(cache_hub, "models--microsoft--TRELLIS.2-4B"))
+    dinov3_cached = os.path.exists(os.path.join(cache_hub, "models--facebook--dinov3-vitl16-pretrain-lvd1689m"))
+    birefnet_cached = os.path.exists(os.path.join(cache_hub, "models--ZhengPeng7--BiRefNet"))
+    
+    if trellis_cached and dinov3_cached and birefnet_cached:
+        # All models cached - use offline mode for faster cold starts
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        print("[Startup] All models found in cache - enabling offline mode")
+    else:
+        # Some models missing - will download them
+        print(f"[Startup] Cached models status:")
+        print(f"[Startup]   TRELLIS.2: {'cached' if trellis_cached else 'NOT cached'}")
+        print(f"[Startup]   DINOv3: {'cached' if dinov3_cached else 'NOT cached'}")
+        print(f"[Startup]   BiRefNet: {'cached' if birefnet_cached else 'NOT cached'}")
+        print("[Startup] Missing models will be downloaded with file locking...")
 else:
-    print("[Startup] WARNING: /runpod-volume not found - models will not be persisted across restarts")
-    print("[Startup]         Attach a network volume for model caching to reduce cold start times")
+    print("[Startup] WARNING: /runpod-volume not found - models will not be persisted")
+    print("[Startup]         Attach a network volume for model caching")
 
 HF_TOKEN = os.environ.get("HF_TOKEN")
 if HF_TOKEN and not HF_TOKEN.startswith("{{"):
@@ -108,29 +135,104 @@ def upload_to_r2(filepath: str, filename: str) -> str:
     )
 
 
+def ensure_auxiliary_models_cached():
+    """
+    Ensure auxiliary models (DINOv3, BiRefNet) are cached.
+    Uses file locking to prevent concurrent downloads from multiple workers.
+    Returns True if all models are available (cached or successfully downloaded).
+    """
+    from pathlib import Path
+    from filelock import FileLock, Timeout
+    
+    cache_hub = Path(HF_CACHE_DIR) / "hub"
+    lock_dir = Path("/tmp/model_locks")
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    
+    models_to_check = [
+        ("facebook/dinov3-vitl16-pretrain-lvd1689m", "DINOv3 feature extractor"),
+        ("ZhengPeng7/BiRefNet", "BiRefNet background removal"),
+    ]
+    
+    all_available = True
+    
+    for repo_id, description in models_to_check:
+        cache_name = f"models--{repo_id.replace('/', '--')}"
+        model_path = cache_hub / cache_name
+        
+        # Check refs/main for complete download
+        refs_main = model_path / "refs" / "main"
+        if refs_main.exists():
+            print(f"[Preload] {description}: already cached")
+            continue
+        
+        # Model not cached - download with lock
+        print(f"[Preload] {description}: downloading...")
+        lock_file = lock_dir / f"{repo_id.replace('/', '--')}.lock"
+        
+        try:
+            with FileLock(str(lock_file), timeout=300):
+                # Double-check after acquiring lock (another worker may have downloaded)
+                if refs_main.exists():
+                    print(f"[Preload] {description}: cached by another worker")
+                    continue
+                
+                # Download the model
+                from huggingface_hub import snapshot_download
+                snapshot_download(
+                    repo_id,
+                    local_files_only=False,
+                    etag_timeout=120,
+                    resume_download=True,
+                )
+                print(f"[Preload] {description}: download complete")
+                
+        except Timeout:
+            print(f"[Preload] {description}: waiting for another worker to finish...")
+            time.sleep(60)
+            if not refs_main.exists():
+                print(f"[Preload] {description}: TIMEOUT - model not available")
+                all_available = False
+        except Exception as e:
+            print(f"[Preload] {description}: download failed - {e}")
+            all_available = False
+    
+    return all_available
+
+
 def load_model():
     """Load TRELLIS.2 model into GPU memory.
     
     Uses HuggingFace cache at HF_HOME for model persistence.
     Requires HF_TOKEN for gated models (facebook/dinov3-*).
+    Handles offline mode when models are pre-cached.
     """
     global pipeline
 
     if pipeline is not None:
         return pipeline
 
-    print("=" * 50)
+    print("=" * 60)
     print("Loading TRELLIS.2 model...")
-    print("=" * 50)
+    print("=" * 60)
     start_time = time.time()
 
     print(f"[Model] Model ID: {HF_MODEL_ID}")
     print(f"[Model] HF_HOME: {os.environ.get('HF_HOME', 'not set')}")
+    offline_mode = os.environ.get("HF_HUB_OFFLINE", "0") == "1"
+    print(f"[Model] Offline mode: {offline_mode}")
     print(f"[Model] HF_TOKEN: {'configured' if os.environ.get('HF_TOKEN') and not os.environ.get('HF_TOKEN', '').startswith('{{') else 'MISSING'}")
+
+    # Ensure auxiliary models are cached (with file locking)
+    if not offline_mode:
+        print("[Model] Ensuring auxiliary models are cached...")
+        if not ensure_auxiliary_models_cached():
+            print("[Model] WARNING: Some auxiliary models failed to download")
+            # Try to continue anyway - may work if already partially cached
 
     from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
     try:
+        # Pass model ID as string - HF will auto-resolve from cache
         pipeline = Trellis2ImageTo3DPipeline.from_pretrained(HF_MODEL_ID)
     except Exception as e:
         error_msg = str(e)
@@ -146,6 +248,12 @@ def load_model():
                 f"2) Network volume is attached (for caching), "
                 f"3) Internet connectivity. Original error: {error_msg}"
             ) from e
+        if "offline" in error_msg.lower() and offline_mode:
+            raise RuntimeError(
+                f"Offline mode failed - models not found in cache. "
+                f"Run preload_models.py first, or disable offline mode. "
+                f"Original error: {error_msg}"
+            ) from e
         raise
 
     pipeline.low_vram = False
@@ -153,7 +261,7 @@ def load_model():
 
     elapsed = time.time() - start_time
     print(f"[Model] Model loaded successfully in {elapsed:.2f}s")
-    print("=" * 50)
+    print("=" * 60)
 
     return pipeline
 
@@ -349,7 +457,6 @@ print("=" * 60)
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.set_float32_matmul_precision('high')
-# Enable cuDNN benchmark for optimized convolution algorithms (consistent image sizes)
 torch.backends.cudnn.benchmark = True
 
 print(f"[Startup] Working directory: {os.getcwd()}")
@@ -360,7 +467,9 @@ if torch.cuda.is_available():
     print(f"[Startup] CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
 print(f"[Startup] HF_HOME: {os.environ.get('HF_HOME', 'not set')}")
-print(f"[Startup] HF_TOKEN: {'configured' if os.environ.get('HF_TOKEN') and not os.environ.get('HF_TOKEN', '').startswith('{{') else 'MISSING OR UNRESOLVED'}")
+print(f"[Startup] HF_HUB_OFFLINE: {os.environ.get('HF_HUB_OFFLINE', '0')}")
+hf_token_status = 'configured' if os.environ.get('HF_TOKEN') and not os.environ.get('HF_TOKEN', '').startswith('{{') else 'MISSING OR UNRESOLVED'
+print(f"[Startup] HF_TOKEN: {hf_token_status}")
 
 if not os.environ.get("HF_TOKEN") or os.environ.get("HF_TOKEN", "").startswith("{{"):
     print("[Startup] ERROR: HF_TOKEN is not properly configured!")
@@ -368,10 +477,25 @@ if not os.environ.get("HF_TOKEN") or os.environ.get("HF_TOKEN", "").startswith("
     print("[Startup] Fix: Add HF_TOKEN as a RunPod secret and reference it as:")
     print("[Startup]        HF_TOKEN={{ RUNPOD_SECRET_HF_TOKEN }}")
 
+# Check cache status for diagnostic purposes
+cache_hub = os.path.join(HF_CACHE_DIR, "hub") if os.path.exists("/runpod-volume") else None
+if cache_hub:
+    print("[Startup] Cache status check:")
+    trellis_status = "cached" if os.path.exists(os.path.join(cache_hub, "models--microsoft--TRELLIS.2-4B")) else "NOT cached"
+    dinov3_status = "cached" if os.path.exists(os.path.join(cache_hub, "models--facebook--dinov3-vitl16-pretrain-lvd1689m")) else "NOT cached"
+    birefnet_status = "cached" if os.path.exists(os.path.join(cache_hub, "models--ZhengPeng7--BiRefNet")) else "NOT cached"
+    print(f"[Startup]   TRELLIS.2: {trellis_status}")
+    print(f"[Startup]   DINOv3: {dinov3_status}")
+    print(f"[Startup]   BiRefNet: {birefnet_status}")
+
 print("[Startup] Pre-loading model (this may take several minutes on first run)...")
 try:
     load_model()
     print("[Startup] Model loaded successfully!")
+    # After successful load, ensure offline mode is enabled for subsequent operations
+    if os.path.exists("/runpod-volume"):
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
 except Exception as e:
     print(f"[Startup] WARNING: Model pre-load failed: {e}")
     print("[Startup] Model will be loaded on first request")

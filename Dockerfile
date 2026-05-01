@@ -43,7 +43,7 @@ RUN pip install --no-cache-dir --constraint /tmp/constraints.txt \
 
 RUN pip install --no-cache-dir --constraint /tmp/constraints.txt kornia timm psutil
 
-RUN pip install --no-cache-dir runpod boto3 requests
+RUN pip install --no-cache-dir runpod boto3 requests filelock
 
 RUN pip install --no-cache-dir --constraint /tmp/constraints.txt \
     git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
@@ -62,9 +62,13 @@ RUN git clone --recursive \
 RUN pip install --no-cache-dir --no-build-isolation /app/TRELLIS.2/o-voxel
 
 ENV HF_HOME="/runpod-volume/huggingface-cache"
+ENV HF_HUB_CACHE="/runpod-volume/huggingface-cache"
+ENV HF_HUB_DISABLE_TELEMETRY="1"
 ENV PYTHONPATH="/app/TRELLIS.2"
 ENV TRELLIS_PATH="/app/TRELLIS.2"
 
 COPY handler.py /app/handler.py
+COPY preload_models.py /app/preload_models.py
+RUN chmod +x /app/preload_models.py
 
 CMD ["python", "-u", "/app/handler.py"]

@@ -38,23 +38,19 @@ TRELLIS.2 uses `facebook/dinov3-vitl16-pretrain-lvd1689m` for image feature extr
 
 ### Step 1: Create Network Volume
 
-TRELLIS.2 requires ~20-25GB of cached model files:
+**Network Volume** stores auxiliary models (~3GB total):
+- `facebook/dinov3-vitl16-pretrain-lvd1689m` (~1.2 GB) - Image features (gated)
+- `ZhengPeng7/BiRefNet` (~1.5 GB) - Background removal
 
-| Model | Size | Purpose |
-|-------|------|---------|
-| `microsoft/TRELLIS.2-4B` | ~15 GB | Main pipeline |
-| `microsoft/TRELLIS-image-large` | ~2 GB | Sparse structure decoder |
-| `facebook/dinov3-vitl16` | ~1.2 GB | Image features (gated) |
-| `ZhengPeng7/BiRefNet` | ~3 GB | Background removal |
-| **Total** | **~21 GB** | |
+**Note:** The main `microsoft/TRELLIS.2-4B` model (~18GB) is handled by **RunPod Model Caching** (Step 4), not the network volume.
 
-**Recommended network volume: 30 GB** (~$2.10/mo at $0.07/GB)
+**Recommended network volume: 5-10 GB** (~$0.35-0.70/mo)
 
 1. Go to **Storage → Network Volumes** in RunPod Console
 2. Click **New Network Volume**
 3. Configure:
-   - **Name**: `trellis2-models` (or your preference)
-   - **Size**: `30` GB (minimum recommended)
+   - **Name**: `trellis2-aux-models` (or your preference)
+   - **Size**: `5` GB (minimum recommended)
    - **Data Center**: Choose based on GPU availability
 4. Note the volume ID (e.g., `nv-xxxxxx`)
 
@@ -98,13 +94,22 @@ Using **RunPod Console**:
    - **Image**: `<your-registry>/trellis2-runpod:latest`
    - **GPU Types**: 
      - Primary: `NVIDIA H100 80GB HBM3` or `NVIDIA H100 PCIe`
-     - Fallback: `NVIDIA A100 80GB PCIe`, `NVIDIA A100-SXM4-80GB`, `NVIDIA RTX 6000 Ada`
+     - Fallback: `NVIDIA A100-SXM4-80GB`, `NVIDIA A100 80GB PCIe`, `NVIDIA RTX 6000 Ada`
    - **Network Volume**: Select the volume created in Step 1
    - **Workers**: Min `0`, Max `3` (adjust based on expected load)
-   - **Idle Timeout**: `300` seconds (5 min)
-   - **FlashBoot**: Enabled (faster cold starts)
+   - **Idle Timeout**: `5` seconds (default, keeps workers warm briefly)
+   - **FlashBoot**: Enabled (default, faster cold starts)
 
-3. Set **Environment Variables**:
+3. **CRITICAL: Enable Model Caching** (reduces cold starts from minutes to seconds)
+   
+   In the endpoint configuration, scroll to **Model** field and enter:
+   ```
+   microsoft/TRELLIS.2-4B
+   ```
+   
+   This tells RunPod to pre-download the main TRELLIS.2 model to hosts before workers start, eliminating the largest download from cold start time.
+
+4. Set **Environment Variables**:
    
    | Variable | Value |
    |----------|-------|
@@ -115,7 +120,7 @@ Using **RunPod Console**:
    | `R2_BUCKET_NAME` | `<your-bucket-name>` |
    | `R2_PUBLIC_URL` | *(optional)* `https://pub-xxx.r2.dev` |
 
-4. Click **Deploy Endpoint**
+5. Click **Deploy Endpoint**
 
 Using **RunPod API**:
 
@@ -135,8 +140,9 @@ curl -X POST "https://rest.runpod.io/v1/endpoints" \
     "networkVolumeId": "nv-xxxxxx",
     "workersMin": 0,
     "workersMax": 3,
-    "idleTimeout": 300,
+    "idleTimeout": 5,
     "flashboot": true,
+    "modelName": "microsoft/TRELLIS.2-4B",
     "env": {
       "HF_TOKEN": "{{ RUNPOD_SECRET_HF_TOKEN }}",
       "R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_R2_ACCESS_KEY_ID }}",
@@ -147,7 +153,9 @@ curl -X POST "https://rest.runpod.io/v1/endpoints" \
   }'
 ```
 
-### Step 5: Verify Deployment
+**Note:** The `modelName` field enables RunPod Model Caching for the main TRELLIS.2 model, which significantly reduces cold start time.
+
+### Step 5: First Request (Populates Cache)
 
 On first cold start, the worker logs should show:
 
@@ -155,19 +163,50 @@ On first cold start, the worker logs should show:
 ============================================================
 TRELLIS.2 RunPod Worker Initializing...
 ============================================================
-[Startup] Working directory: /app
-[Startup] Python version: 3.10.x
-[Startup] CUDA available: True
-[Startup] CUDA device: NVIDIA H100 80GB HBM3
-[Startup] CUDA memory: 80.x GB
-[Startup] HF_HOME: /runpod-volume/huggingface-cache
+[Startup] Network volume detected: /runpod-volume
+[Startup] HF cache directory: /runpod-volume/huggingface-cache
+[Startup] Cached models status:
+[Startup]   TRELLIS.2: NOT cached
+[Startup]   DINOv3: NOT cached
+[Startup]   BiRefNet: NOT cached
+[Startup] Missing models will be downloaded with file locking...
 [Startup] HF_TOKEN: configured
 [Startup] Pre-loading model (this may take several minutes on first run)...
 ```
 
-**First cold start**: Downloads ~21GB of models (TRELLIS.2-4B + DINOv3 + BiRefNet) — expect 5-10 minutes depending on network.
+**First cold start** (8-15 minutes):
+- ✅ `microsoft/TRELLIS.2-4B`: Pre-downloaded by RunPod Model Caching (fast)
+- ⬇️ `facebook/dinov3-vitl16-pretrain-lvd1689m`: Downloads with file locking
+- ⬇️ `ZhengPeng7/BiRefNet`: Downloads with file locking
 
-**Subsequent cold starts**: Models load from network volume cache — expect 30-60 seconds.
+**Subsequent cold starts** (10-30 seconds):
+- All models load from network volume cache
+- `HF_HUB_OFFLINE=1` prevents network checks
+
+**Warm worker** (within idle timeout): < 1 second
+
+### How Cold Start Optimization Works
+
+```
+┌─ Worker Start ──────────────────────────────────────────────┐
+│ 1. Detect /runpod-volume                                     │
+│ 2. Check if ALL models cached:                              │
+│    ├─ microsoft/TRELLIS.2-4B (RunPod Model Caching)        │
+│    ├─ facebook/dinov3-vitl16-pretrain-lvd1689m              │
+│    └─ ZhengPeng7/BiRefNet                                    │
+│                                                              │
+│ IF all cached → Set HF_HUB_OFFLINE=1 (10-30 sec load)       │
+│ IF any missing → Download with file locking                  │
+│                 (first worker only, others wait)            │
+│                 → Set HF_HUB_OFFLINE=1 after success        │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Key optimizations:**
+- **RunPod Model Caching**: Pre-downloads main TRELLIS.2 model to host
+- **Network Volume**: Persists auxiliary models across worker restarts
+- **Offline Mode**: Skips network checks when models are cached
+- **File Locking**: Prevents concurrent downloads from multiple workers
 
 ## API Usage
 
@@ -268,10 +307,12 @@ Benchmarks from NVIDIA H100 80GB. Times include model loading, inference, export
 │                                                                  │
 │  Request ──┬──► RunPod Worker                                   │
 │             │       │                                            │
-│             │       ├── Model Cache: /runpod-volume/             │
-│             │       │   └── microsoft/TRELLIS.2-4B              │
-│             │       │   └── facebook/dinov3-vitl16 (gated)      │
-│             │       │   └── ZhengPeng7/BiRefNet                 │
+│             │       ├── RunPod Model Cache (HOST):              │
+│             │       │   └── microsoft/TRELLIS.2-4B (~18GB)     │
+│             │       │                                            │
+│             │       ├── Network Volume (/runpod-volume/):      │
+│             │       │   └── facebook/dinov3-vitl16 (~1.2GB)    │
+│             │       │   └── ZhengPeng7/BiRefNet (~1.5GB)       │
 │             │       │                                            │
 │             │       ├── TRELLIS.2 Pipeline (GPU)                 │
 │             │       │   └── Image → 3D Voxel → Mesh              │
@@ -286,7 +327,10 @@ Benchmarks from NVIDIA H100 80GB. Times include model loading, inference, export
 ```
 
 **Key Components:**
-- **Model caching**: Network volume at `/runpod-volume/huggingface-cache/` persists ~21GB of models
+- **RunPod Model Caching**: Pre-downloads `microsoft/TRELLIS.2-4B` to host (~18GB) — eliminates main model download from cold start
+- **Network Volume**: Persists auxiliary models (DINOv3 + BiRefNet, ~3GB) across worker restarts — small 5GB volume is sufficient
+- **Offline Mode**: After first download, workers use `HF_HUB_OFFLINE=1` for instant cache loads (10-30 sec)
+- **File Locking**: First worker downloads auxiliary models, others wait and use cached copies
 - **GPU memory**: Model stays loaded (`low_vram=False`) for sub-60s inference
 - **Output storage**: Cloudflare R2 bypasses RunPod's 20MB response limit
 
@@ -309,21 +353,61 @@ HuggingFace authentication failed. Fix:
 2. Accept the license at https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m
 3. Wait 5-10 minutes for license acceptance to propagate
 
+### "Offline mode failed - models not found in cache"
+
+Models are missing from cache. Fix:
+
+1. Ensure network volume is attached in endpoint config
+2. If first deployment, wait for first request to populate cache (8-15 min)
+3. Check logs for download errors (network issues, HF token permissions)
+
 ### Models Re-downloaded Every Cold Start
 
-Network volume not attached. Fix:
+Network volume not attached or offline mode not enabled. Fix:
 
 1. Go to endpoint settings in RunPod Console
 2. Ensure **Network Volume** is selected
-3. Verify `/runpod-volume` exists in worker logs
+3. Verify logs show `/runpod-volume` detected
+4. Check for `[Startup] All models found in cache - enabling offline mode`
 
-### Cold Start Takes 10+ Minutes
+### Cold Start Takes 10+ Minutes Every Time
 
-First cold start downloads models. Expected behavior. Subsequent starts should be 30-60s.
+This should only happen ONCE (first worker). Subsequent starts should be 10-30 seconds.
 
-If subsequent cold starts are slow:
-- Check network volume is attached (see above)
-- Check `/runpod-volume/huggingface-cache/` exists in worker
+If every cold start is slow:
+1. **Network volume not attached**: Check endpoint config
+2. **Cache permissions**: Ensure worker can write to `/runpod-volume`
+3. **HF_HUB_OFFLINE not set**: Check logs for `HF_HUB_OFFLINE: 1`
+4. **Model caching not enabled**: Add `microsoft/TRELLIS.2-4B` in endpoint's Model field
+
+### First Cold Start Behavior
+
+| Request | Expected Time | What Happens |
+|---------|---------------|--------------|
+| First ever | 8-15 min | Downloads DINOv3 + BiRefNet with file locking |
+| Second+ | 10-30 sec | Loads all models from cache (offline mode) |
+| Warm worker | < 1 sec | Model already in GPU memory |
+
+### Optional: Pre-populate Cache Manually
+
+To avoid the first-request download delay for auxiliary models (~3GB), you can pre-populate the network volume:
+
+1. Deploy a **temporary Pod** with your network volume attached
+2. SSH into the pod and run:
+   ```bash
+   cd /app
+   python preload_models.py
+   ```
+3. Verify cache:
+   ```bash
+   ls -la /runpod-volume/huggingface-cache/hub/
+   # Should show: models--facebook--dinov3-*, models--ZhengPeng7--BiRefNet
+   ```
+4. Stop the pod
+
+This pre-downloads DINOv3 and BiRefNet before your first serverless request.
+
+**Note:** The main `microsoft/TRELLIS.2-4B` model is handled by RunPod Model Caching (configured in Step 4) and doesn't need manual pre-population.
 
 ### R2 Upload Fails
 
