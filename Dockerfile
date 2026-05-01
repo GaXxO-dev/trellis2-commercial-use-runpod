@@ -49,11 +49,6 @@ RUN pip install --no-cache-dir runpod boto3 requests
 RUN pip install --no-cache-dir --constraint /tmp/constraints.txt \
     git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
 
-RUN git clone --recursive \
-    https://github.com/GaXxO-dev/TRELLIS.2-commercial-use.git /app/TRELLIS.2
-
-RUN pip install --no-cache-dir --no-build-isolation /app/TRELLIS.2/o-voxel
-
 RUN git clone https://github.com/JeffreyXiang/CuMesh.git /tmp/CuMesh --recursive \
     && pip install --no-cache-dir --no-build-isolation /tmp/CuMesh \
     && rm -rf /tmp/CuMesh
@@ -61,6 +56,11 @@ RUN git clone https://github.com/JeffreyXiang/CuMesh.git /tmp/CuMesh --recursive
 RUN git clone https://github.com/JeffreyXiang/FlexGEMM.git /tmp/FlexGEMM --recursive \
     && pip install --no-cache-dir --no-build-isolation /tmp/FlexGEMM \
     && rm -rf /tmp/FlexGEMM
+
+RUN git clone --recursive \
+    https://github.com/GaXxO-dev/TRELLIS.2-commercial-use.git /app/TRELLIS.2
+
+RUN pip install --no-cache-dir --no-build-isolation /app/TRELLIS.2/o-voxel
 
 ENV HF_HOME="/runpod-volume/huggingface-cache"
 ENV PYTHONPATH="/app/TRELLIS.2"
