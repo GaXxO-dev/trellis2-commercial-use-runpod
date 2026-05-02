@@ -62,7 +62,6 @@ RUN git clone --recursive \
 RUN pip install --no-cache-dir --no-build-isolation /app/TRELLIS.2/o-voxel
 
 ENV HF_HOME="/runpod-volume/huggingface-cache"
-ENV HF_HUB_CACHE="/runpod-volume/huggingface-cache"
 ENV HF_HUB_DISABLE_TELEMETRY="1"
 ENV PYTHONPATH="/app/TRELLIS.2"
 ENV TRELLIS_PATH="/app/TRELLIS.2"

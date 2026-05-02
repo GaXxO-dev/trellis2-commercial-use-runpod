@@ -39,16 +39,19 @@ os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
 
 # Cache directories - set BEFORE any HF imports
+# Use HF_HOME only (not HF_HUB_CACHE) to ensure consistent path: HF_HOME/hub/
 HF_CACHE_DIR = os.environ.get("HF_HOME", "/runpod-volume/huggingface-cache")
 
 if os.path.exists("/runpod-volume"):
     os.environ["HF_HOME"] = HF_CACHE_DIR
-    os.environ["HF_HUB_CACHE"] = HF_CACHE_DIR
+    # Don't set HF_HUB_CACHE - let HF create the hub/ subdirectory automatically
     os.makedirs(f"{HF_CACHE_DIR}/hub", exist_ok=True)
     print(f"[Startup] Network volume detected: /runpod-volume")
-    print(f"[Startup] HF cache directory: {HF_CACHE_DIR}")
+    print(f"[Startup] HF_HOME: {HF_CACHE_DIR}")
+    print(f"[Startup] HF cache location: {HF_CACHE_DIR}/hub/")
     
     # Check if we have cached models - if so, use offline mode
+    # Models are at: HF_HOME/hub/models--{org}--{name}/
     cache_hub = os.path.join(HF_CACHE_DIR, "hub")
     trellis_cached = os.path.exists(os.path.join(cache_hub, "models--microsoft--TRELLIS.2-4B"))
     dinov3_cached = os.path.exists(os.path.join(cache_hub, "models--facebook--dinov3-vitl16-pretrain-lvd1689m"))
@@ -179,13 +182,19 @@ def ensure_auxiliary_models_cached():
                 
                 # Download the model
                 from huggingface_hub import snapshot_download
-                snapshot_download(
+                downloaded_path = snapshot_download(
                     repo_id,
                     local_files_only=False,
                     etag_timeout=120,
-                    resume_download=True,
                 )
-                print(f"[Preload] {description}: download complete")
+                print(f"[Preload] {description}: download complete -> {downloaded_path}")
+                
+                # Verify it went to the right place
+                if not refs_main.exists():
+                    print(f"[Preload] WARNING: Download completed but refs/main not found at {refs_main}")
+                    print(f"[Preload] Download path was: {downloaded_path}")
+                    print(f"[Preload] HF_HOME: {HF_CACHE_DIR}")
+                    print(f"[Preload] Expected cache: {cache_hub}")
                 
         except Timeout:
             print(f"[Preload] {description}: waiting for another worker to finish...")

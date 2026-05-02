@@ -26,6 +26,7 @@ from filelock import FileLock
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 HF_CACHE = os.environ.get("HF_HOME", "/runpod-volume/huggingface-cache")
+# Don't set HF_HUB_CACHE - let HF create hub/ subdirectory automatically
 LOCK_DIR = "/tmp/model_locks"
 LOCK_TIMEOUT = 600  # 10 minutes
 
