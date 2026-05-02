@@ -94,6 +94,7 @@ import boto3
 from botocore.config import Config
 from io import BytesIO
 from PIL import Image
+from trellis2.utils import glb_utils
 
 # Add TRELLIS.2 to path
 TRELLIS_PATH = os.environ.get("TRELLIS_PATH", "/app/TRELLIS.2")
@@ -361,7 +362,7 @@ def handler(job):
         import random
         seed = random.randint(0, 2**32 - 1)
 
-    # Simplify target always 16777216 (nvdiffrast limit, matches official example.py)
+    # Simplify target always 16777216 (rasterizer vertex limit)
     simplify_target = 16777216
 
     # Map resolution to decimation target
@@ -420,7 +421,7 @@ def handler(job):
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
             model_path = f.name
 
-        glb.export(model_path, extension_webp=(output_format == "glb" and extension_webp))
+        glb_utils.export_glb_fixed(glb, model_path, extension_webp=(output_format == "glb" and extension_webp))
 
         model_url = upload_to_r2(model_path, r2_key)
         model_size_mb = os.path.getsize(model_path) / (1024 * 1024)
