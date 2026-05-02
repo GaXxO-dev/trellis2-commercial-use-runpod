@@ -38,20 +38,22 @@ TRELLIS.2 uses `facebook/dinov3-vitl16-pretrain-lvd1689m` for image feature extr
 
 ### Step 1: Create Network Volume
 
-**Network Volume** stores ALL models (~21GB total):
-- `microsoft/TRELLIS.2-4B` (~18 GB) - Main pipeline (8 models)
+**Network Volume** stores ALL models (~25-30GB total):
+- `microsoft/TRELLIS.2-4B` (~18 GB) - Main pipeline (8 model files)
+- `microsoft/TRELLIS-image-large` (~2 GB) - Dependency (sparse structure decoder)
 - `facebook/dinov3-vitl16-pretrain-lvd1689m` (~1.2 GB) - Image features (gated)
 - `ZhengPeng7/BiRefNet` (~1.5 GB) - Background removal
+- HuggingFace temp/extract files (~5 GB during download)
 
-**Note:** RunPod Model Caching (Step 4) pre-downloads `microsoft/TRELLIS.2-4B` to hosts, but models are still stored at `/runpod-volume/huggingface-cache/`. The network volume must have space for all models.
+**Recommended network volume: 50 GB minimum** (~$3.50/mo)
 
-**Recommended network volume: 30-50 GB** (~$2.10-3.50/mo)
+**Note:** 30GB is NOT enough - you'll get "Disk quota exceeded" errors. 50GB provides headroom for temp files during model download.
 
 1. Go to **Storage → Network Volumes** in RunPod Console
 2. Click **New Network Volume**
 3. Configure:
    - **Name**: `trellis2-models` (or your preference)
-   - **Size**: `30` GB (minimum for all models + headroom)
+   - **Size**: `50` GB (minimum recommended - 30GB will fail during model download)
    - **Data Center**: Choose based on GPU availability
 4. Note the volume ID (e.g., `nv-xxxxxx`)
 
